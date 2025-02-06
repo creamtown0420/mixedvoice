@@ -1,0 +1,34 @@
+'''
+短時間フーリエ変換(stft)を変数で実行
+'''
+
+import wave
+import numpy as np
+from scipy import signal
+import matplotlib.pyplot as plt
+
+'''waveファイルから必要な情報を読み込む'''
+wavefile = wave.open(r"D:\cream\workspace\mixvoice\rec2.wav", "r") # wave file load
+
+nframes = wavefile.getnframes() # フレーム総数を調べる
+framerate = wavefile.getframerate() # サンプリング周波数)を調べる
+
+y = wavefile.readframes(nframes) # フレームの読み込み
+y = np.frombuffer(y, dtype="int16") # 波形を変換出来る様に変形する
+t = np.arange(0, len(y))/float(framerate) # 音声データの長さ(x軸)
+
+wavefile.close() # waveファイルを閉じる
+
+N=1024
+
+freqs, times, Sx = signal.spectrogram(y, fs=framerate, window='hann',
+                                      nperseg=1024, noverlap=N-100,
+                                      detrend=False, scaling='spectrum') # スペクトログラム変数
+
+f, ax = plt.subplots()
+# ax.pcolormesh(times, freqs/1000, 10* np.log10(Sx), cmap='viridis')
+ax.pcolormesh(times, freqs, 10* np.log10(Sx), cmap='viridis')
+# ax.set_ylabel('Frequency[kHz]')
+ax.set_ylabel('Frequency[Hz]')
+ax.set_xlabel('Time[s]')
+plt.show()
