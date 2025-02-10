@@ -10,18 +10,18 @@ from sklearn.preprocessing import StandardScaler
 # =========================================================
 # 1. パラメータ設定
 # =========================================================
-SAMPLE_RATE = 16000     # サンプリングレート
-DURATION = 2.0          # 切り出す秒数
-N_FFT = 1024
-HOP_LENGTH = 512
-N_MELS = 64
-FMIN = 80               # 人の声を想定した最小周波数 (Hz)
-FMAX = 8000             # 最大周波数 (Hz) - sr=16000ならナイキスト周波数が8000Hz
-TEST_SIZE = 0.2         # テストデータ割合
-RANDOM_STATE = 42       # 再現性のための乱数シード
+SAMPLE_RATE = 16000     # 音声データのサンプリングレート（1秒あたりのデータ数）
+DURATION = 2.0          # 1つのデータとして使う音声の長さ（秒）
+N_FFT = 1024            # フーリエ変換のサイズ
+HOP_LENGTH = 512        # フレームをずらす幅
+N_MELS = 64             # メルスペクトログラムの周波数ビン数（縦軸の分解度）
+FMIN = 80               # 人の声の最低周波数（Hz）
+FMAX = 8000             # 人の声の最高周波数（Hz）
+TEST_SIZE = 0.2         # 学習用データとテスト用データの割合（20%をテストにする）
+RANDOM_STATE = 42       # データを分割するときの乱数の種（再現性を確保するため）
 
-# データ拡張（必要に応じて True/False を切り替え）
-ENABLE_DATA_AUGMENT = False  # ピッチシフトやタイムストレッチを行う場合は True
+ENABLE_DATA_AUGMENT = False  # データ拡張（音声加工）を行う場合は True にする
+
 
 # =========================================================
 # 2. データ読み込み＆前処理関数
@@ -69,10 +69,10 @@ def extract_features(audio, sr=SAMPLE_RATE, n_fft=N_FFT, hop_length=HOP_LENGTH, 
         fmax=fmax    # 最大周波数
     )
     
-    # 対数メルスペクトログラムへ
+    # 対数メルスペクトログラムへ 人間の耳は「対数的」に音を感じるため、dB でスケール変換すると学習しやすくなる
     log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
     
-    # (周波数, 時間) -> (周波数, 時間, 1) へ reshape
+    # 軸(周波数, 時間) -> (周波数, 時間, 1) へ reshape
     log_mel_spec = np.expand_dims(log_mel_spec, axis=-1)
     
     return log_mel_spec
