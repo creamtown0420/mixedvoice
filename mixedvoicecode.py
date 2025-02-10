@@ -9,23 +9,22 @@ from sklearn.model_selection import train_test_split
 # =========================================================
 # 1. パラメータ設定
 # =========================================================
-SAMPLE_RATE = 16000    # 音声読み込み時のサンプリングレート
-DURATION = 2.0         # 解析する音声の長さ（秒）
-N_FFT = 1024           # STFT で使う FFT サイズ
-HOP_LENGTH = 512       # STFT のホップサイズ
-N_MELS = 64            # メルスペクトログラムの周波数ビン数（任意）
-TEST_SIZE = 0.2        # テストデータの割合
+SAMPLE_RATE = 16000    # サンプリングレート
+DURATION = 2.0         # 切り出す秒数
+N_FFT = 1024           
+HOP_LENGTH = 512       
+N_MELS = 64            # メルスペクトログラムの周波数ビン数
+TEST_SIZE = 0.2        
 
 # =========================================================
-# 2. データ読み込み用関数の定義
+# 2. データ読み込み & 特徴抽出 関数
 # =========================================================
 def load_audio_file(file_path, duration=DURATION, sr=SAMPLE_RATE):
     """
-    WAV ファイルを読み込み、先頭から duration 秒だけを返す。
-    duration 秒に満たない場合はゼロ埋め（padding）する。
+    音声ファイルを読み込み、先頭から duration 秒だけを切り出す。
+    足りない場合はゼロ埋め。
     """
     audio, _ = librosa.load(file_path, sr=sr, mono=True, duration=duration)
-    # duration秒より短い場合、パディング
     if len(audio) < int(sr * duration):
         pad_length = int(sr * duration) - len(audio)
         audio = np.pad(audio, (0, pad_length), mode='constant')
@@ -33,10 +32,9 @@ def load_audio_file(file_path, duration=DURATION, sr=SAMPLE_RATE):
 
 def extract_features(audio, sr=SAMPLE_RATE, n_fft=N_FFT, hop_length=HOP_LENGTH, n_mels=N_MELS):
     """
-    ここでは例としてメルスペクトログラムを特徴量として抽出。
-    STFT からスペクトログラムを作り、さらにメル尺度に変換。
+    メルスペクトログラム (周波数ビン×フレーム数) を取り出し、
+    値は対数変換したうえで (周波数ビン, フレーム数, 1) の形にする。
     """
-    # メルスペクトログラム (周波数ビン x フレーム数)
     mel_spec = librosa.feature.melspectrogram(
         y=audio,
         sr=sr,
@@ -44,28 +42,25 @@ def extract_features(audio, sr=SAMPLE_RATE, n_fft=N_FFT, hop_length=HOP_LENGTH, 
         hop_length=hop_length,
         n_mels=n_mels
     )
-    # 対数変換（対数メルスペクトログラム）
     log_mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
     
-    # CNNに渡しやすい形状 (周波数ビン, フレーム数, チャネル数=1) を想定
-    # MLPを使う場合は2次元を平坦化して1次元ベクトルにしても良い
-    # ここでは MLP 前提として、2次元をベクトルにフラット化します
-    feature_vector = log_mel_spec.flatten()
+    # 形状 (n_mels, time_frames)
+    # この後CNNに入力するために、チャネル次元を追加
+    # 最終形状: (n_mels, time_frames, 1)
+    log_mel_spec = np.expand_dims(log_mel_spec, axis=-1)
     
-    return feature_vector
+    return log_mel_spec
 
 # =========================================================
 # 3. データセット作成
 # =========================================================
 def create_dataset(dataset_dir="dataset"):
     """
-    dataset_dir 以下に「mix_voice」「not_mix_voice」フォルダがあることを想定。
-    それぞれの音声ファイルから特徴量を抽出し、ラベルとともに返す。
+    dataset_dir 以下に 「mix_voice」 「not_mix_voice」 フォルダがあることを想定。
     """
     X = []
     y = []
     
-    # クラスラベルを付与するための辞書
     class_labels = {
         "mix_voice": 1,
         "not_mix_voice": 0
@@ -73,11 +68,10 @@ def create_dataset(dataset_dir="dataset"):
     
     for class_name, label in class_labels.items():
         folder_path = os.path.join(dataset_dir, class_name)
-        # .wav ファイルを取得
         for file_path in glob.glob(folder_path + "/*.wav"):
             audio = load_audio_file(file_path)
-            feature_vector = extract_features(audio)
-            X.append(feature_vector)
+            feat = extract_features(audio)
+            X.append(feat)
             y.append(label)
     
     X = np.array(X, dtype=np.float32)
@@ -86,20 +80,28 @@ def create_dataset(dataset_dir="dataset"):
     return X, y
 
 # =========================================================
-# 4. モデル構築
+# 4. CNNモデルの定義
 # =========================================================
-def create_model(input_dim):
+def create_cnn_model(input_shape):
     """
-    全結合層（MLP）のシンプルな例。入力次元 input_dim は、
-    メルスペクトログラムを flatten したサイズ。
+    input_shape は (n_mels, time_frames, 1) を想定。
+    CNN で 2D 畳み込みを行い、最後に Dense で二値分類。
     """
     model = keras.Sequential([
-        keras.layers.InputLayer(input_shape=(input_dim,)),
-        keras.layers.Dense(128, activation='relu'),
-        keras.layers.Dropout(0.3),
+        # Conv2D(フィルタ数, カーネルサイズ, etc...)
+        keras.layers.Conv2D(16, (3,3), activation='relu', input_shape=input_shape),
+        keras.layers.MaxPooling2D((2,2)),
+        
+        keras.layers.Conv2D(32, (3,3), activation='relu'),
+        keras.layers.MaxPooling2D((2,2)),
+        
+        keras.layers.Conv2D(64, (3,3), activation='relu'),
+        keras.layers.MaxPooling2D((2,2)),
+        
+        keras.layers.Flatten(),  # 2次元畳み込みの出力を1次元ベクトル化
         keras.layers.Dense(64, activation='relu'),
         keras.layers.Dropout(0.3),
-        keras.layers.Dense(1, activation='sigmoid')  # 2クラス分類 (0 or 1) に使う出力層
+        keras.layers.Dense(1, activation='sigmoid')  # 二値分類なので最終出力は1ユニットのシグモイド
     ])
     
     model.compile(
@@ -110,54 +112,47 @@ def create_model(input_dim):
     return model
 
 # =========================================================
-# 5. メイン処理：データ作成 → 学習 → 検証
+# 5. メイン処理
 # =========================================================
 if __name__ == "__main__":
-    # データセット作成
+    # データセット読み込み
     X, y = create_dataset("dataset")
-    print("X shape:", X.shape)  # (サンプル数, 特徴量次元)
-    print("y shape:", y.shape)  # (サンプル数, )
+    print("X shape:", X.shape)  # (サンプル数, n_mels, time_frames, 1)
+    print("y shape:", y.shape)  # (サンプル数,)
     
     # 学習データとテストデータに分割
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=TEST_SIZE, shuffle=True, random_state=42)
     
-    # モデルを構築
-    input_dim = X_train.shape[1]
-    model = create_model(input_dim)
+    # モデル作成
+    input_shape = X_train.shape[1:]  # (n_mels, time_frames, 1)
+    model = create_cnn_model(input_shape)
     model.summary()
     
     # 学習
     epochs = 10
     batch_size = 16
+    
     history = model.fit(
         X_train, y_train,
         validation_split=0.2,
         epochs=epochs,
-        batch_size=batch_size,
-        verbose=1
+        batch_size=batch_size
     )
     
     # テストデータで評価
     test_loss, test_acc = model.evaluate(X_test, y_test, verbose=0)
     print(f"Test Loss: {test_loss:.4f}, Test Accuracy: {test_acc:.4f}")
     
-    # =========================================================
-    # 6. 推論のサンプル
-    # =========================================================
-    # 適当なファイルを読み込んで推論してみる
-    test_file_path = "sample_input.wav"  # 例: 実際に判定したい音声ファイル
+    # 推論サンプル
+    test_file_path = "sample_input.wav"
     if os.path.exists(test_file_path):
         audio_test = load_audio_file(test_file_path)
         feat_test = extract_features(audio_test)
-        
-        # 形状を (1, input_dim) にしてモデルに入力
+        # (n_mels, time_frames, 1) → (1, n_mels, time_frames, 1)
         feat_test = np.expand_dims(feat_test, axis=0)
-        pred = model.predict(feat_test)
         
-        # シグモイド出力を閾値0.5 で二値化
+        pred = model.predict(feat_test)
         if pred[0][0] >= 0.5:
-            print(f"{test_file_path} はミックスボイスの可能性が高いです。 (スコア={pred[0][0]:.4f})")
+            print(f"{test_file_path} はミックスボイスの可能性が高いです (スコア={pred[0][0]:.4f})")
         else:
-            print(f"{test_file_path} はミックスボイスではない可能性が高いです。 (スコア={pred[0][0]:.4f})")
-    else:
-        print(f"推論テスト用のファイルが見つかりません: {test_file_path}")
+            print(f"{test_file_path} はミックスボイスではない可能性が高いです (スコア={pred[0][0]:.4f})")
